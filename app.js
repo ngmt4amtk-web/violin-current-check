@@ -16,8 +16,10 @@
   function loadState() {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+      const allowedViews = ["stages", "question", "result", "history"];
+      const savedView = saved.view === "home" ? "stages" : saved.view;
       return {
-        view: saved.view || "home",
+        view: allowedViews.includes(savedView) ? savedView : "stages",
         stageId: saved.stageId || data.stages[0].id,
         questionIndex: Number.isInteger(saved.questionIndex) ? saved.questionIndex : 0,
         answers: saved.answers || {},
@@ -25,7 +27,7 @@
       };
     } catch (_error) {
       return {
-        view: "home",
+        view: "stages",
         stageId: data.stages[0].id,
         questionIndex: 0,
         answers: {},
@@ -221,7 +223,6 @@
   function renderNav(active) {
     return `
       <nav class="nav" aria-label="主要画面">
-        <button class="${active === "home" ? "active" : ""}" data-action="view" data-view="home">今の状態</button>
         <button class="${active === "stages" ? "active" : ""}" data-action="view" data-view="stages">段階</button>
         <button class="${active === "history" ? "active" : ""}" data-action="view" data-view="history">履歴</button>
       </nav>
@@ -252,71 +253,6 @@
     `;
   }
 
-  function findRecommendedStage() {
-    const incomplete = data.stages.find((stage) => {
-      const result = calculate(stage, getAnswers(stage.id));
-      return result.completion < 80 || result.importantBlocks.length || result.unconfirmed > 0;
-    });
-    return incomplete || data.stages[data.stages.length - 1];
-  }
-
-  function renderHome() {
-    const stage = findRecommendedStage();
-    const result = calculate(stage, getAnswers(stage.id));
-    const latest = latestEntry(stage.id);
-    const previous = previousEntry(stage.id);
-    const delta = latest && previous ? latest.completion - previous.completion : null;
-    const practice = buildPractice(stage, getAnswers(stage.id));
-
-    app.innerHTML = `
-      <section class="screen">
-        ${renderTopbar()}
-        <p class="eyebrow">今日の現在地</p>
-        <h2 class="title">今のバイオリンの状態を見てみよう</h2>
-        <p class="subtitle">${escapeHtml(stage.name)}から見ると、次の練習が決めやすいです。</p>
-
-        <section class="section grid-two" aria-label="前回の状態">
-          <div class="soft-panel metric">
-            <span class="metric-value">${latest ? `${latest.completion}点` : `${result.completion}点`}</span>
-            <span class="metric-label">前回の完成度</span>
-          </div>
-          <div class="soft-panel metric">
-            <span class="metric-value">${latest ? latest.unconfirmed : result.unconfirmed}</span>
-            <span class="metric-label">未確認の項目</span>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-head">
-            <h2 class="section-title">今日チェックする段階</h2>
-            ${delta === null ? "" : `<span class="pill ${delta >= 0 ? "good" : "warn"}">${delta >= 0 ? "+" : ""}${delta}点</span>`}
-          </div>
-          ${renderStageRow(stage, { buttonLabel: "開く" })}
-        </section>
-
-        <section class="section">
-          <div class="section-head">
-            <h2 class="section-title">今日おすすめの練習</h2>
-          </div>
-          <ol class="card list">
-            ${practice.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
-          </ol>
-        </section>
-
-        <section class="section">
-          <div class="section-head">
-            <h2 class="section-title">段階一覧</h2>
-            <button class="plain-button" data-action="view" data-view="stages">すべて見る</button>
-          </div>
-          <div class="stack">
-            ${data.stages.slice(0, 3).map((item) => renderStageRow(item, { buttonLabel: "開く" })).join("")}
-          </div>
-        </section>
-        ${renderNav("home")}
-      </section>
-    `;
-  }
-
   function renderStages() {
     app.innerHTML = `
       <section class="screen">
@@ -344,7 +280,12 @@
 
     app.innerHTML = `
       <section class="screen question-screen">
-        ${renderTopbar(stage.name, `<button class="plain-button" data-action="result" data-stage-id="${stage.id}">結果を見る</button>`)}
+        ${renderTopbar(stage.name, `
+          <div class="top-actions">
+            <button class="plain-button" data-action="view" data-view="stages">最初に戻る</button>
+            <button class="plain-button" data-action="result" data-stage-id="${stage.id}">結果を見る</button>
+          </div>
+        `)}
         <div class="progress-line">
           <div class="bar" aria-hidden="true"><span style="width:${progress}%"></span></div>
           <span class="pill">${index + 1}/${stage.questions.length}</span>
@@ -386,11 +327,23 @@
     const practice = buildPractice(stage, answers);
     const teacherFocus = buildTeacherFocus(stage, answers, result);
     const donutValue = Math.round((result.completion / 100) * 360);
+    const answerRows = stage.questions.map((question, index) => {
+      const answer = answers[question.id];
+      const meta = answerMeta[answer] || { label: "未回答", className: "blank" };
+      return `
+        <li class="answer-row">
+          <div>
+            <p class="answer-question">${index + 1}. ${escapeHtml(question.text)}</p>
+            <p class="answer-criterion">${escapeHtml(question.criterion)}</p>
+          </div>
+          <span class="answer-badge ${meta.className}">${escapeHtml(meta.label)}</span>
+        </li>
+      `;
+    }).join("");
 
     app.innerHTML = `
       <section class="screen">
         ${renderTopbar(stage.name, `<button class="plain-button" data-action="start-stage" data-stage-id="${stage.id}">見直す</button>`)}
-        <p class="eyebrow">今の状態</p>
         <h2 class="title">完成度 ${result.completion}点</h2>
 
         <div class="summary-hero">
@@ -408,6 +361,16 @@
           <div class="count-cell"><strong>${result.counts.almost}</strong><span>もう少し</span></div>
           <div class="count-cell"><strong>${result.counts.notYet}</strong><span>まだ</span></div>
           <div class="count-cell"><strong>${result.unconfirmed}</strong><span>未確認</span></div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2 class="section-title">回答一覧</h2>
+            <span class="pill">${stage.questions.length}問</span>
+          </div>
+          <ol class="answer-list">
+            ${answerRows}
+          </ol>
         </section>
 
         <section class="section stack">
@@ -601,7 +564,7 @@
         return;
       }
       state = {
-        view: "home",
+        view: "stages",
         stageId: data.stages[0].id,
         questionIndex: 0,
         answers: {},
@@ -618,7 +581,7 @@
     else if (state.view === "question") renderQuestion();
     else if (state.view === "result") renderResult(true);
     else if (state.view === "history") renderHistory();
-    else renderHome();
+    else renderStages();
   }
 
   app.addEventListener("click", handleClick);
